@@ -92,6 +92,31 @@ function Chat({ me, onLogout }) {
   const mediaRecorderRef = useRef(null)
   const chunksRef = useRef([])
 
+  // Conversations (home)
+  const [convos, setConvos] = useState([])
+  const [loadingConvos, setLoadingConvos] = useState(false)
+
+  const loadConvos = async () => {
+    if (!me) return
+    try {
+      setLoadingConvos(true)
+      const res = await fetch(`${API_BASE}/conversations?user=${encodeURIComponent(me.username)}&limit=50`)
+      if (res.ok) {
+        const data = await res.json()
+        setConvos(data.conversations || [])
+      }
+    } catch {}
+    finally {
+      setLoadingConvos(false)
+    }
+  }
+
+  useEffect(() => {
+    loadConvos()
+    const i = setInterval(loadConvos, 5000)
+    return () => clearInterval(i)
+  }, [me])
+
   useEffect(() => {
     const id = setInterval(async () => {
       if (!peer) return
@@ -136,6 +161,7 @@ function Chat({ me, onLogout }) {
       setText('')
       setFile(null)
       setMessages(m => [...m, data])
+      loadConvos() // reflect on home immediately
     } catch (e) {
       setError(e.message)
     }
@@ -156,6 +182,7 @@ function Chat({ me, onLogout }) {
       if (!res.ok) throw new Error((await res.json()).detail || 'Failed to send voice note')
       const data = await res.json()
       setMessages(m => [...m, data])
+      loadConvos()
     } catch (e) {
       setError(e.message)
     } finally {
@@ -212,8 +239,22 @@ function Chat({ me, onLogout }) {
     setPaused(false)
   }
 
+  const initials = (name, username) => {
+    const n = (name || username || '').trim()
+    const parts = n.split(' ').filter(Boolean)
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
+    if (parts.length === 1) return parts[0][0].toUpperCase()
+    return (username || '?')[0].toUpperCase()
+  }
+
+  const formatTime = (iso) => {
+    if (!iso) return ''
+    const d = new Date(iso)
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+
   return (
-    <div className="max-w-4xl mx-auto p-4">
+    <div className="max-w-5xl mx-auto p-4">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl text-white font-semibold">Slash</h2>
         <div className="text-blue-200 text-sm">Signed in as <b>{me.username}</b> <button onClick={() => { localStorage.removeItem('slash_user'); onLogout() }} className="ml-3 underline">Log out</button></div>
@@ -221,21 +262,62 @@ function Chat({ me, onLogout }) {
 
       {!peer ? (
         <div className="bg-slate-800/50 p-4 rounded-xl border border-blue-500/20">
-          <input value={query} onChange={e => search(e.target.value)} placeholder="Search username" className="w-full px-3 py-2 rounded bg-slate-900/60 text-white" />
-          <div className="mt-3 space-y-2">
-            {results.map(u => (
-              <div key={u.id} className="flex items-center justify-between bg-slate-900/50 p-3 rounded">
-                <div className="text-blue-100">@{u.username} <span className="text-blue-300/60">{u.name}</span></div>
-                <button onClick={() => setPeer(u)} className="px-3 py-1 rounded bg-blue-600 text-white">Chat</button>
+          <div className="flex flex-col gap-4">
+            <input value={query} onChange={e => search(e.target.value)} placeholder="Search username" className="w-full px-3 py-2 rounded bg-slate-900/60 text-white" />
+            {results.length > 0 && (
+              <div className="space-y-2">
+                {results.map(u => (
+                  <div key={u.id} className="flex items-center justify-between bg-slate-900/50 p-3 rounded hover:bg-slate-900/70 transition">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-full bg-blue-600/30 text-blue-200 flex items-center justify-center font-semibold">{initials(u.name, u.username)}</div>
+                      <div className="text-blue-100">
+                        @{u.username} <span className="text-blue-300/60">{u.name}</span>
+                      </div>
+                    </div>
+                    <button onClick={() => setPeer(u)} className="px-3 py-1 rounded bg-blue-600 text-white">Chat</button>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-white font-medium">Recent chats</h3>
+                {loadingConvos && <span className="text-xs text-blue-300/70">Updating…</span>}
+              </div>
+              {convos.length === 0 ? (
+                <div className="text-blue-300/70 text-sm">No conversations yet. Start one by searching above.</div>
+              ) : (
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {convos.map(c => (
+                    <button key={c.peer} onClick={() => setPeer({ id: c.peer_id, name: c.peer_name, username: c.peer })} className="text-left group p-4 rounded-xl border border-blue-500/20 bg-slate-900/40 hover:bg-slate-900/70 transition flex gap-3">
+                      <div className="w-11 h-11 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold shadow-lg">
+                        {initials(c.peer_name, c.peer)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <div className="text-white truncate">{c.peer_name || c.peer}</div>
+                          <div className="text-xs text-blue-300/70 ml-2 shrink-0">{formatTime(c.last?.created_at)}</div>
+                        </div>
+                        <div className="text-sm text-blue-200/80 truncate mt-0.5">
+                          {c.last?.type === 'text' ? (c.last?.text || '') : c.last?.type === 'image' ? '📷 Photo' : c.last?.type === 'video' ? '🎥 Video' : '🎤 Voice'}
+                        </div>
+                        <div className="h-1 mt-3 rounded bg-blue-500/20 overflow-hidden">
+                          <div className="h-full w-0 group-hover:w-full bg-gradient-to-r from-blue-500 to-indigo-500 transition-all duration-500" />
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       ) : (
         <div className="bg-slate-800/50 rounded-xl border border-blue-500/20 overflow-hidden">
           <div className="px-4 py-3 border-b border-blue-500/20 flex items-center justify-between">
             <div className="text-white font-medium">@{peer.username}</div>
-            <button onClick={() => setPeer(null)} className="text-blue-300 underline">Change</button>
+            <button onClick={() => setPeer(null)} className="text-blue-300 underline">Back</button>
           </div>
           <div className="h-[60vh] overflow-y-auto p-4 space-y-3">
             {messages.map(m => (
@@ -301,7 +383,7 @@ export default function App() {
   const [me, setMe] = useState(null)
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
-      <div className="max-w-5xl mx-auto p-6">
+      <div className="max-w-6xl mx-auto p-6">
         <h1 className="text-3xl font-bold mb-2">Slash</h1>
         <p className="text-blue-300/80 mb-6">Android-style chat with Google Sheets backend</p>
         {!me ? <Auth onAuthed={setMe} /> : <Chat me={me} onLogout={() => setMe(null)} />}
