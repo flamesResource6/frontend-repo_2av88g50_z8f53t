@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const API_BASE = import.meta.env.VITE_BACKEND_URL || ''
 
@@ -64,7 +64,7 @@ function Auth({ onAuthed }) {
         <input className="w-full px-3 py-2 rounded bg-slate-900/60 text-white" type="password" placeholder="Password" value={form.password} onChange={e => setForm(v => ({ ...v, password: e.target.value }))} />
         <button disabled={loading} className="w-full py-2 rounded bg-blue-600 hover:bg-blue-500 text-white">{loading ? 'Please wait…' : (mode === 'register' ? 'Sign up' : 'Log in')}</button>
       </form>
-      <div className="mt-3 text-sm text-blue-200">
+      <div className="mt-3 text-sm text-blue-2 00">
         {mode === 'register' ? (
           <button className="underline" onClick={() => setMode('login')}>Have an account? Log in</button>
         ) : (
@@ -83,16 +83,24 @@ function Chat({ me, onLogout }) {
   const [text, setText] = useState('')
   const [type, setType] = useState('text')
   const [file, setFile] = useState(null)
+  const [error, setError] = useState('')
+
+  // Voice note state
+  const [recording, setRecording] = useState(false)
+  const mediaRecorderRef = useRef(null)
+  const chunksRef = useRef([])
 
   useEffect(() => {
     const id = setInterval(async () => {
       if (!peer) return
       const url = `${API_BASE}/messages/history?user1=${me.username}&user2=${peer.username}&limit=200`
-      const res = await fetch(url)
-      if (res.ok) {
-        const data = await res.json()
-        setMessages(data.messages)
-      }
+      try {
+        const res = await fetch(url)
+        if (res.ok) {
+          const data = await res.json()
+          setMessages(data.messages)
+        }
+      } catch {}
     }, 3000)
     return () => clearInterval(id)
   }, [me, peer])
@@ -100,14 +108,17 @@ function Chat({ me, onLogout }) {
   const search = async (q) => {
     setQuery(q)
     if (!q) return setResults([])
-    const res = await fetch(`${API_BASE}/users/search?q=${encodeURIComponent(q)}`)
-    if (res.ok) {
-      const data = await res.json()
-      setResults(data.results.filter(u => u.username !== me.username))
-    }
+    try {
+      const res = await fetch(`${API_BASE}/users/search?q=${encodeURIComponent(q)}`)
+      if (res.ok) {
+        const data = await res.json()
+        setResults(data.results.filter(u => u.username !== me.username))
+      }
+    } catch {}
   }
 
   const send = async () => {
+    setError('')
     if (!peer) return
     const fd = new FormData()
     fd.append('sender', me.username)
@@ -116,13 +127,47 @@ function Chat({ me, onLogout }) {
     if (type === 'text') fd.append('text', text)
     if (file) fd.append('file', file)
 
-    const res = await fetch(`${API_BASE}/messages/send`, { method: 'POST', body: fd })
-    if (res.ok) {
+    try {
+      const res = await fetch(`${API_BASE}/messages/send`, { method: 'POST', body: fd })
+      if (!res.ok) throw new Error((await res.json()).detail || 'Failed to send')
+      const data = await res.json()
       setText('')
       setFile(null)
-      const data = await res.json()
       setMessages(m => [...m, data])
+    } catch (e) {
+      setError(e.message)
     }
+  }
+
+  const startRecording = async () => {
+    setError('')
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mr = new MediaRecorder(stream)
+      chunksRef.current = []
+      mr.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunksRef.current.push(e.data) }
+      mr.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
+        const f = new File([blob], `voice-${Date.now()}.webm`, { type: 'audio/webm' })
+        setType('audio')
+        setFile(f)
+        // Stop all tracks to release mic
+        stream.getTracks().forEach(t => t.stop())
+      }
+      mediaRecorderRef.current = mr
+      mr.start()
+      setRecording(true)
+    } catch (e) {
+      setError('Microphone permission denied')
+    }
+  }
+
+  const stopRecording = () => {
+    const mr = mediaRecorderRef.current
+    if (mr && mr.state !== 'inactive') {
+      mr.stop()
+    }
+    setRecording(false)
   }
 
   return (
@@ -175,12 +220,22 @@ function Chat({ me, onLogout }) {
               <option value="audio">Audio</option>
             </select>
             {type === 'text' ? (
-              <input value={text} onChange={e => setText(e.target.value)} placeholder="Type a message" className="col-span-8 px-3 py-2 rounded bg-slate-900/60 text-white" />
+              <input value={text} onChange={e => setText(e.target.value)} placeholder="Type a message" className="col-span-7 px-3 py-2 rounded bg-slate-900/60 text-white" />
             ) : (
-              <input type="file" onChange={e => setFile(e.target.files?.[0] || null)} className="col-span-8 text-blue-100" accept={type === 'image' ? 'image/*' : type === 'video' ? 'video/*' : 'audio/*'} />
+              <input type="file" onChange={e => setFile(e.target.files?.[0] || null)} className="col-span-7 text-blue-100" accept={type === 'image' ? 'image/*' : type === 'video' ? 'video/*' : 'audio/*'} />
             )}
-            <button onClick={send} className="col-span-2 rounded bg-blue-600 text-white">Send</button>
+            <div className="col-span-3 flex items-center gap-2">
+              {type === 'audio' && (
+                recording ? (
+                  <button onClick={stopRecording} className="px-3 py-2 rounded bg-red-600 text-white">Stop</button>
+                ) : (
+                  <button onClick={startRecording} className="px-3 py-2 rounded bg-slate-600 text-white">Record</button>
+                )
+              )}
+              <button onClick={send} className="flex-1 rounded bg-blue-600 text-white py-2">Send</button>
+            </div>
           </div>
+          {error && <div className="px-4 pb-3 text-red-400 text-sm">{error}</div>}
         </div>
       )}
     </div>
