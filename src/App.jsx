@@ -27,26 +27,30 @@ async function apiFetch(url, options = {}) {
   }
 }
 
-function StatusBanner() {
-  const [status, setStatus] = useState(null)
-  useEffect(() => {
-    let cancelled = false
-    const load = async () => {
-      try {
-        const res = await apiFetch(`${API_BASE}/test`)
-        if (!res.ok) return
-        const data = await res.json()
-        if (!cancelled) setStatus(data)
-      } catch {}
+function NetworkStatusBanner() {
+  const [error, setError] = useState('')
+
+  const check = async () => {
+    try {
+      const res = await apiFetch(`${API_BASE}/test`)
+      if (!res.ok) throw new Error('Backend not ready')
+      setError('')
+    } catch (e) {
+      const msg = e?.message || `Network error. Cannot reach backend at ${API_BASE}. Set VITE_BACKEND_URL in the frontend or ensure backend is running.`
+      setError(msg)
     }
-    load()
+  }
+
+  useEffect(() => {
+    check()
+    const id = setInterval(check, 10000)
+    return () => clearInterval(id)
   }, [])
 
-  if (!status) return null
-  const usingSheets = status.sheets === 'connected'
+  if (!error) return null
   return (
-    <div className={`mb-4 rounded-lg border px-3 py-2 text-sm ${usingSheets ? 'bg-emerald-900/30 border-emerald-500/30 text-emerald-200' : 'bg-sky-900/30 border-sky-500/30 text-sky-200'}`}>
-      {usingSheets ? 'Connected to Google Sheets' : 'Running on database fallback'}
+    <div className="mb-4 rounded-lg border px-3 py-2 text-sm bg-rose-900/30 border-rose-500/30 text-rose-100">
+      {error}
     </div>
   )
 }
@@ -321,7 +325,8 @@ function Chat({ me, onLogout }) {
         <div className="text-blue-200 text-sm">Signed in as <b>{me.username}</b> <button onClick={() => { localStorage.removeItem('slash_user'); onLogout() }} className="ml-3 underline">Log out</button></div>
       </div>
 
-      <StatusBanner />
+      {/* Hide any Sheets-specific callouts; show only network status if needed */}
+      <NetworkStatusBanner />
 
       {!peer ? (
         <div className="bg-slate-800/50 p-4 rounded-xl border border-blue-500/20">
@@ -449,7 +454,9 @@ export default function App() {
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
       <div className="max-w-6xl mx-auto p-6">
         <h1 className="text-3xl font-bold mb-2">Slash</h1>
-        <p className="text-blue-300/80 mb-6">Android-style chat with Google Sheets + DB fallback</p>
+        <p className="text-blue-300/80 mb-6">Android-style chat with robust storage</p>
+        {/* Global network status on home page */}
+        <NetworkStatusBanner />
         {!me ? <Auth onAuthed={setMe} /> : <Chat me={me} onLogout={() => setMe(null)} />}
       </div>
     </div>
