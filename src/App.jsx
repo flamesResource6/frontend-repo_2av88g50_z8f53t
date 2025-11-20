@@ -1,6 +1,55 @@
 import { useEffect, useRef, useState } from 'react'
 
-const API_BASE = import.meta.env.VITE_BACKEND_URL || ''
+// Robust backend URL detection so we avoid NetworkError
+const API_BASE = (() => {
+  try {
+    const env = import.meta.env.VITE_BACKEND_URL
+    if (env && typeof env === 'string') return env.replace(/\/$/, '')
+  } catch {}
+  if (typeof window !== 'undefined') {
+    const { protocol, hostname } = window.location
+    // Default backend port in this stack
+    return `${protocol}//${hostname}:8000`
+  }
+  return ''
+})()
+
+async function apiFetch(url, options = {}) {
+  try {
+    const res = await fetch(url, options)
+    return res
+  } catch (e) {
+    // Transform low-level network errors into a clear message
+    const hint = `Cannot reach backend at ${API_BASE}. Set VITE_BACKEND_URL in the frontend or ensure backend is running.`
+    const err = new Error('Network error. ' + hint)
+    err.cause = e
+    throw err
+  }
+}
+
+function StatusBanner() {
+  const [status, setStatus] = useState(null)
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const res = await apiFetch(`${API_BASE}/test`)
+        if (!res.ok) return
+        const data = await res.json()
+        if (!cancelled) setStatus(data)
+      } catch {}
+    }
+    load()
+  }, [])
+
+  if (!status) return null
+  const usingSheets = status.sheets === 'connected'
+  return (
+    <div className={`mb-4 rounded-lg border px-3 py-2 text-sm ${usingSheets ? 'bg-emerald-900/30 border-emerald-500/30 text-emerald-200' : 'bg-sky-900/30 border-sky-500/30 text-sky-200'}`}>
+      {usingSheets ? 'Connected to Google Sheets' : 'Running on database fallback'}
+    </div>
+  )
+}
 
 function Auth({ onAuthed }) {
   const [mode, setMode] = useState('login')
@@ -19,7 +68,7 @@ function Auth({ onAuthed }) {
     setError('')
     try {
       if (mode === 'register') {
-        const res = await fetch(`${API_BASE}/register`, {
+        const res = await apiFetch(`${API_BASE}/register`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: form.name, username: form.username, email: form.email, password: form.password })
@@ -29,7 +78,7 @@ function Auth({ onAuthed }) {
         localStorage.setItem('slash_user', JSON.stringify(user))
         onAuthed(user)
       } else {
-        const res = await fetch(`${API_BASE}/login`, {
+        const res = await apiFetch(`${API_BASE}/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ identifier: form.identifier, password: form.password })
@@ -40,7 +89,7 @@ function Auth({ onAuthed }) {
         onAuthed(user)
       }
     } catch (err) {
-      setError(err.message)
+      setError(err.message || 'Request failed')
     } finally {
       setLoading(false)
     }
@@ -100,20 +149,28 @@ function Chat({ me, onLogout }) {
     if (!me) return
     try {
       setLoadingConvos(true)
-      const res = await fetch(`${API_BASE}/conversations?user=${encodeURIComponent(me.username)}&limit=50`)
+      const res = await apiFetch(`${API_BASE}/conversations?user=${encodeURIComponent(me.username)}&limit=50`)
       if (res.ok) {
         const data = await res.json()
-        setConvos(data.conversations || [])
+        const list = data.conversations || []
+        setConvos(list)
+        // Auto-open the most recent conversation to always show recent messages
+        if (!peer && list.length > 0) {
+          const first = list[0]
+          setPeer({ id: first.peer_id, name: first.peer_name, username: first.peer })
+        }
       }
-    } catch {}
-    finally {
+    } catch (e) {
+      // surface as banner under composer
+      setError(e.message)
+    } finally {
       setLoadingConvos(false)
     }
   }
 
   useEffect(() => {
     loadConvos()
-    const i = setInterval(loadConvos, 5000)
+    const i = setInterval(loadConvos, 3000) // more frequent to "always show" recent activity
     return () => clearInterval(i)
   }, [me])
 
@@ -122,13 +179,15 @@ function Chat({ me, onLogout }) {
       if (!peer) return
       const url = `${API_BASE}/messages/history?user1=${me.username}&user2=${peer.username}&limit=200`
       try {
-        const res = await fetch(url)
+        const res = await apiFetch(url)
         if (res.ok) {
           const data = await res.json()
           setMessages(data.messages)
         }
-      } catch {}
-    }, 3000)
+      } catch (e) {
+        setError(e.message)
+      }
+    }, 2000)
     return () => clearInterval(id)
   }, [me, peer])
 
@@ -136,12 +195,14 @@ function Chat({ me, onLogout }) {
     setQuery(q)
     if (!q) return setResults([])
     try {
-      const res = await fetch(`${API_BASE}/users/search?q=${encodeURIComponent(q)}`)
+      const res = await apiFetch(`${API_BASE}/users/search?q=${encodeURIComponent(q)}`)
       if (res.ok) {
         const data = await res.json()
-        setResults(data.results.filter(u => u.username !== me.username))
+        setResults((data.results || []).filter(u => u.username !== me.username))
       }
-    } catch {}
+    } catch (e) {
+      setError(e.message)
+    }
   }
 
   const send = async () => {
@@ -155,7 +216,7 @@ function Chat({ me, onLogout }) {
     if (file) fd.append('file', file)
 
     try {
-      const res = await fetch(`${API_BASE}/messages/send`, { method: 'POST', body: fd })
+      const res = await apiFetch(`${API_BASE}/messages/send`, { method: 'POST', body: fd })
       if (!res.ok) throw new Error((await res.json()).detail || 'Failed to send')
       const data = await res.json()
       setText('')
@@ -178,7 +239,7 @@ function Chat({ me, onLogout }) {
     const f = new File([blob], `voice-${Date.now()}.webm`, { type: 'audio/webm' })
     fd.append('file', f)
     try {
-      const res = await fetch(`${API_BASE}/messages/send`, { method: 'POST', body: fd })
+      const res = await apiFetch(`${API_BASE}/messages/send`, { method: 'POST', body: fd })
       if (!res.ok) throw new Error((await res.json()).detail || 'Failed to send voice note')
       const data = await res.json()
       setMessages(m => [...m, data])
@@ -255,10 +316,12 @@ function Chat({ me, onLogout }) {
 
   return (
     <div className="max-w-5xl mx-auto p-4">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-2">
         <h2 className="text-xl text-white font-semibold">Slash</h2>
         <div className="text-blue-200 text-sm">Signed in as <b>{me.username}</b> <button onClick={() => { localStorage.removeItem('slash_user'); onLogout() }} className="ml-3 underline">Log out</button></div>
       </div>
+
+      <StatusBanner />
 
       {!peer ? (
         <div className="bg-slate-800/50 p-4 rounded-xl border border-blue-500/20">
@@ -312,6 +375,7 @@ function Chat({ me, onLogout }) {
               )}
             </div>
           </div>
+          {error && <div className="mt-3 text-red-400 text-sm">{error}</div>}
         </div>
       ) : (
         <div className="bg-slate-800/50 rounded-xl border border-blue-500/20 overflow-hidden">
@@ -385,7 +449,7 @@ export default function App() {
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
       <div className="max-w-6xl mx-auto p-6">
         <h1 className="text-3xl font-bold mb-2">Slash</h1>
-        <p className="text-blue-300/80 mb-6">Android-style chat with Google Sheets backend</p>
+        <p className="text-blue-300/80 mb-6">Android-style chat with Google Sheets + DB fallback</p>
         {!me ? <Auth onAuthed={setMe} /> : <Chat me={me} onLogout={() => setMe(null)} />}
       </div>
     </div>
