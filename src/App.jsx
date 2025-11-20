@@ -1,73 +1,201 @@
-function App() {
+import { useEffect, useMemo, useRef, useState } from 'react'
+
+const API_BASE = import.meta.env.VITE_BACKEND_URL || ''
+
+function Auth({ onAuthed }) {
+  const [mode, setMode] = useState('login')
+  const [form, setForm] = useState({ name: '', username: '', email: '', password: '', identifier: '' })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const saved = localStorage.getItem('slash_user')
+    if (saved) onAuthed(JSON.parse(saved))
+  }, [])
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    setError('')
+    try {
+      if (mode === 'register') {
+        const res = await fetch(`${API_BASE}/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: form.name, username: form.username, email: form.email, password: form.password })
+        })
+        if (!res.ok) throw new Error((await res.json()).detail || 'Failed to register')
+        const user = await res.json()
+        localStorage.setItem('slash_user', JSON.stringify(user))
+        onAuthed(user)
+      } else {
+        const res = await fetch(`${API_BASE}/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identifier: form.identifier, password: form.password })
+        })
+        if (!res.ok) throw new Error((await res.json()).detail || 'Failed to login')
+        const user = await res.json()
+        localStorage.setItem('slash_user', JSON.stringify(user))
+        onAuthed(user)
+      }
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-      {/* Subtle pattern overlay */}
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(59,130,246,0.05),transparent_50%)]"></div>
-
-      <div className="relative min-h-screen flex items-center justify-center p-8">
-        <div className="max-w-2xl w-full">
-          {/* Header with Flames icon */}
-          <div className="text-center mb-12">
-            <div className="inline-flex items-center justify-center mb-6">
-              <img
-                src="/flame-icon.svg"
-                alt="Flames"
-                className="w-24 h-24 drop-shadow-[0_0_25px_rgba(59,130,246,0.5)]"
-              />
-            </div>
-
-            <h1 className="text-5xl font-bold text-white mb-4 tracking-tight">
-              Flames Blue
-            </h1>
-
-            <p className="text-xl text-blue-200 mb-6">
-              Build applications through conversation
-            </p>
-          </div>
-
-          {/* Instructions */}
-          <div className="bg-slate-800/50 backdrop-blur-sm border border-blue-500/20 rounded-2xl p-8 shadow-xl mb-6">
-            <div className="flex items-start gap-4 mb-6">
-              <div className="flex-shrink-0 w-8 h-8 bg-blue-500 text-white rounded-lg flex items-center justify-center font-bold">
-                1
-              </div>
-              <div>
-                <h3 className="font-semibold text-white mb-1">Describe your idea</h3>
-                <p className="text-blue-200/80 text-sm">Use the chat panel on the left to tell the AI what you want to build</p>
-              </div>
-            </div>
-
-            <div className="flex items-start gap-4 mb-6">
-              <div className="flex-shrink-0 w-8 h-8 bg-blue-500 text-white rounded-lg flex items-center justify-center font-bold">
-                2
-              </div>
-              <div>
-                <h3 className="font-semibold text-white mb-1">Watch it build</h3>
-                <p className="text-blue-200/80 text-sm">Your app will appear in this preview as the AI generates the code</p>
-              </div>
-            </div>
-
-            <div className="flex items-start gap-4">
-              <div className="flex-shrink-0 w-8 h-8 bg-blue-500 text-white rounded-lg flex items-center justify-center font-bold">
-                3
-              </div>
-              <div>
-                <h3 className="font-semibold text-white mb-1">Refine and iterate</h3>
-                <p className="text-blue-200/80 text-sm">Continue the conversation to add features and make changes</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Footer */}
-          <div className="text-center">
-            <p className="text-sm text-blue-300/60">
-              No coding required • Just describe what you want
-            </p>
-          </div>
-        </div>
+    <div className="max-w-md mx-auto p-6 bg-slate-800/50 rounded-2xl border border-blue-500/20 mt-12">
+      <h2 className="text-2xl font-semibold text-white mb-4">{mode === 'register' ? 'Create account' : 'Welcome back'}</h2>
+      {error && <div className="text-red-400 mb-3 text-sm">{error}</div>}
+      <form onSubmit={submit} className="space-y-3">
+        {mode === 'register' && (
+          <>
+            <input className="w-full px-3 py-2 rounded bg-slate-900/60 text-white" placeholder="Name" value={form.name} onChange={e => setForm(v => ({ ...v, name: e.target.value }))} />
+            <input className="w-full px-3 py-2 rounded bg-slate-900/60 text-white" placeholder="Username" value={form.username} onChange={e => setForm(v => ({ ...v, username: e.target.value }))} />
+            <input className="w-full px-3 py-2 rounded bg-slate-900/60 text-white" placeholder="Email" value={form.email} onChange={e => setForm(v => ({ ...v, email: e.target.value }))} />
+          </>
+        )}
+        {mode === 'login' && (
+          <input className="w-full px-3 py-2 rounded bg-slate-900/60 text-white" placeholder="Username or Email" value={form.identifier} onChange={e => setForm(v => ({ ...v, identifier: e.target.value }))} />
+        )}
+        <input className="w-full px-3 py-2 rounded bg-slate-900/60 text-white" type="password" placeholder="Password" value={form.password} onChange={e => setForm(v => ({ ...v, password: e.target.value }))} />
+        <button disabled={loading} className="w-full py-2 rounded bg-blue-600 hover:bg-blue-500 text-white">{loading ? 'Please wait…' : (mode === 'register' ? 'Sign up' : 'Log in')}</button>
+      </form>
+      <div className="mt-3 text-sm text-blue-200">
+        {mode === 'register' ? (
+          <button className="underline" onClick={() => setMode('login')}>Have an account? Log in</button>
+        ) : (
+          <button className="underline" onClick={() => setMode('register')}>New here? Create account</button>
+        )}
       </div>
     </div>
   )
 }
 
-export default App
+function Chat({ me, onLogout }) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState([])
+  const [peer, setPeer] = useState(null)
+  const [messages, setMessages] = useState([])
+  const [text, setText] = useState('')
+  const [type, setType] = useState('text')
+  const [file, setFile] = useState(null)
+
+  useEffect(() => {
+    const id = setInterval(async () => {
+      if (!peer) return
+      const url = `${API_BASE}/messages/history?user1=${me.username}&user2=${peer.username}&limit=200`
+      const res = await fetch(url)
+      if (res.ok) {
+        const data = await res.json()
+        setMessages(data.messages)
+      }
+    }, 3000)
+    return () => clearInterval(id)
+  }, [me, peer])
+
+  const search = async (q) => {
+    setQuery(q)
+    if (!q) return setResults([])
+    const res = await fetch(`${API_BASE}/users/search?q=${encodeURIComponent(q)}`)
+    if (res.ok) {
+      const data = await res.json()
+      setResults(data.results.filter(u => u.username !== me.username))
+    }
+  }
+
+  const send = async () => {
+    if (!peer) return
+    const fd = new FormData()
+    fd.append('sender', me.username)
+    fd.append('receiver', peer.username)
+    fd.append('type', type)
+    if (type === 'text') fd.append('text', text)
+    if (file) fd.append('file', file)
+
+    const res = await fetch(`${API_BASE}/messages/send`, { method: 'POST', body: fd })
+    if (res.ok) {
+      setText('')
+      setFile(null)
+      const data = await res.json()
+      setMessages(m => [...m, data])
+    }
+  }
+
+  return (
+    <div className="max-w-4xl mx-auto p-4">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xl text-white font-semibold">Slash</h2>
+        <div className="text-blue-200 text-sm">Signed in as <b>{me.username}</b> <button onClick={() => { localStorage.removeItem('slash_user'); onLogout() }} className="ml-3 underline">Log out</button></div>
+      </div>
+
+      {!peer ? (
+        <div className="bg-slate-800/50 p-4 rounded-xl border border-blue-500/20">
+          <input value={query} onChange={e => search(e.target.value)} placeholder="Search username" className="w-full px-3 py-2 rounded bg-slate-900/60 text-white" />
+          <div className="mt-3 space-y-2">
+            {results.map(u => (
+              <div key={u.id} className="flex items-center justify-between bg-slate-900/50 p-3 rounded">
+                <div className="text-blue-100">@{u.username} <span className="text-blue-300/60">{u.name}</span></div>
+                <button onClick={() => setPeer(u)} className="px-3 py-1 rounded bg-blue-600 text-white">Chat</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="bg-slate-800/50 rounded-xl border border-blue-500/20 overflow-hidden">
+          <div className="px-4 py-3 border-b border-blue-500/20 flex items-center justify-between">
+            <div className="text-white font-medium">@{peer.username}</div>
+            <button onClick={() => setPeer(null)} className="text-blue-300 underline">Change</button>
+          </div>
+          <div className="h-[60vh] overflow-y-auto p-4 space-y-3">
+            {messages.map(m => (
+              <div key={m.id} className={`max-w-[75%] px-3 py-2 rounded-xl ${m.sender === me.username ? 'bg-blue-600 text-white ml-auto' : 'bg-slate-900 text-blue-100'}`}>
+                {m.type === 'text' && <div>{m.text}</div>}
+                {m.type !== 'text' && m.media_url && (
+                  m.type === 'image' ? (
+                    <img src={`${API_BASE}${m.media_url}`} className="rounded" />
+                  ) : m.type === 'video' ? (
+                    <video src={`${API_BASE}${m.media_url}`} controls className="rounded max-w-full" />
+                  ) : (
+                    <audio src={`${API_BASE}${m.media_url}`} controls />
+                  )
+                )}
+                <div className="text-xs opacity-70 mt-1">{new Date(m.created_at).toLocaleTimeString()}</div>
+              </div>
+            ))}
+          </div>
+          <div className="p-3 border-t border-blue-500/20 grid grid-cols-12 gap-2">
+            <select value={type} onChange={e => setType(e.target.value)} className="col-span-2 px-2 py-2 rounded bg-slate-900/60 text-white">
+              <option value="text">Text</option>
+              <option value="image">Image</option>
+              <option value="video">Video</option>
+              <option value="audio">Audio</option>
+            </select>
+            {type === 'text' ? (
+              <input value={text} onChange={e => setText(e.target.value)} placeholder="Type a message" className="col-span-8 px-3 py-2 rounded bg-slate-900/60 text-white" />
+            ) : (
+              <input type="file" onChange={e => setFile(e.target.files?.[0] || null)} className="col-span-8 text-blue-100" accept={type === 'image' ? 'image/*' : type === 'video' ? 'video/*' : 'audio/*'} />
+            )}
+            <button onClick={send} className="col-span-2 rounded bg-blue-600 text-white">Send</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function App() {
+  const [me, setMe] = useState(null)
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
+      <div className="max-w-5xl mx-auto p-6">
+        <h1 className="text-3xl font-bold mb-2">Slash</h1>
+        <p className="text-blue-300/80 mb-6">Android-style chat with Google Sheets backend</p>
+        {!me ? <Auth onAuthed={setMe} /> : <Chat me={me} onLogout={() => setMe(null)} />}
+      </div>
+    </div>
+  )
+}
