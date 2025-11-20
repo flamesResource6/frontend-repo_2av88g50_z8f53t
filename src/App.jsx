@@ -87,6 +87,8 @@ function Chat({ me, onLogout }) {
 
   // Voice note state
   const [recording, setRecording] = useState(false)
+  const [paused, setPaused] = useState(false)
+  const [sendingVoice, setSendingVoice] = useState(false)
   const mediaRecorderRef = useRef(null)
   const chunksRef = useRef([])
 
@@ -139,6 +141,28 @@ function Chat({ me, onLogout }) {
     }
   }
 
+  const sendVoiceBlob = async (blob) => {
+    if (!peer) return
+    setSendingVoice(true)
+    setError('')
+    const fd = new FormData()
+    fd.append('sender', me.username)
+    fd.append('receiver', peer.username)
+    fd.append('type', 'audio')
+    const f = new File([blob], `voice-${Date.now()}.webm`, { type: 'audio/webm' })
+    fd.append('file', f)
+    try {
+      const res = await fetch(`${API_BASE}/messages/send`, { method: 'POST', body: fd })
+      if (!res.ok) throw new Error((await res.json()).detail || 'Failed to send voice note')
+      const data = await res.json()
+      setMessages(m => [...m, data])
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSendingVoice(false)
+    }
+  }
+
   const startRecording = async () => {
     setError('')
     try {
@@ -146,19 +170,36 @@ function Chat({ me, onLogout }) {
       const mr = new MediaRecorder(stream)
       chunksRef.current = []
       mr.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunksRef.current.push(e.data) }
-      mr.onstop = () => {
+      mr.onstop = async () => {
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
-        const f = new File([blob], `voice-${Date.now()}.webm`, { type: 'audio/webm' })
-        setType('audio')
-        setFile(f)
-        // Stop all tracks to release mic
+        // release mic
         stream.getTracks().forEach(t => t.stop())
+        await sendVoiceBlob(blob) // auto-send after stop
       }
       mediaRecorderRef.current = mr
       mr.start()
       setRecording(true)
+      setPaused(false)
     } catch (e) {
       setError('Microphone permission denied')
+      setRecording(false)
+      setPaused(false)
+    }
+  }
+
+  const pauseRecording = () => {
+    const mr = mediaRecorderRef.current
+    if (mr && mr.state === 'recording') {
+      mr.pause()
+      setPaused(true)
+    }
+  }
+
+  const resumeRecording = () => {
+    const mr = mediaRecorderRef.current
+    if (mr && mr.state === 'paused') {
+      mr.resume()
+      setPaused(false)
     }
   }
 
@@ -168,6 +209,7 @@ function Chat({ me, onLogout }) {
       mr.stop()
     }
     setRecording(false)
+    setPaused(false)
   }
 
   return (
@@ -212,7 +254,7 @@ function Chat({ me, onLogout }) {
               </div>
             ))}
           </div>
-          <div className="p-3 border-t border-blue-500/20 grid grid-cols-12 gap-2">
+          <div className="p-3 border-t border-blue-500/20 grid grid-cols-12 gap-2 items-center">
             <select value={type} onChange={e => setType(e.target.value)} className="col-span-2 px-2 py-2 rounded bg-slate-900/60 text-white">
               <option value="text">Text</option>
               <option value="image">Image</option>
@@ -220,19 +262,32 @@ function Chat({ me, onLogout }) {
               <option value="audio">Audio</option>
             </select>
             {type === 'text' ? (
-              <input value={text} onChange={e => setText(e.target.value)} placeholder="Type a message" className="col-span-7 px-3 py-2 rounded bg-slate-900/60 text-white" />
+              <input value={text} onChange={e => setText(e.target.value)} placeholder="Type a message" className="col-span-6 px-3 py-2 rounded bg-slate-900/60 text-white" />
             ) : (
-              <input type="file" onChange={e => setFile(e.target.files?.[0] || null)} className="col-span-7 text-blue-100" accept={type === 'image' ? 'image/*' : type === 'video' ? 'video/*' : 'audio/*'} />
+              <input type="file" onChange={e => setFile(e.target.files?.[0] || null)} className="col-span-6 text-blue-100" accept={type === 'image' ? 'image/*' : type === 'video' ? 'video/*' : 'audio/*'} />
             )}
+
+            {/* Voice recorder controls - always visible */}
             <div className="col-span-3 flex items-center gap-2">
-              {type === 'audio' && (
-                recording ? (
-                  <button onClick={stopRecording} className="px-3 py-2 rounded bg-red-600 text-white">Stop</button>
-                ) : (
-                  <button onClick={startRecording} className="px-3 py-2 rounded bg-slate-600 text-white">Record</button>
-                )
+              {!recording && (
+                <button onClick={startRecording} className="px-3 py-2 rounded bg-slate-600 text-white" disabled={!peer || sendingVoice}>
+                  {sendingVoice ? 'Sending…' : 'Record'}
+                </button>
               )}
-              <button onClick={send} className="flex-1 rounded bg-blue-600 text-white py-2">Send</button>
+              {recording && (
+                <>
+                  {!paused ? (
+                    <button onClick={pauseRecording} className="px-3 py-2 rounded bg-yellow-600 text-white">Pause</button>
+                  ) : (
+                    <button onClick={resumeRecording} className="px-3 py-2 rounded bg-green-600 text-white">Resume</button>
+                  )}
+                  <button onClick={stopRecording} className="px-3 py-2 rounded bg-red-600 text-white">Stop</button>
+                </>
+              )}
+            </div>
+
+            <div className="col-span-1">
+              <button onClick={send} className="w-full rounded bg-blue-600 text-white py-2" disabled={!peer}>Send</button>
             </div>
           </div>
           {error && <div className="px-4 pb-3 text-red-400 text-sm">{error}</div>}
