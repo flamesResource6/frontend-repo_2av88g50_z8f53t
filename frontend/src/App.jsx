@@ -77,6 +77,16 @@ function Chat({ me, onLogout }) {
   const [file, setFile] = useState(null)
   const [type, setType] = useState('text')
 
+  // Voice recording state
+  const [recording, setRecording] = useState(false)
+  const [permissionError, setPermissionError] = useState('')
+  const [elapsed, setElapsed] = useState(0)
+  const mediaRecorderRef = useRef(null)
+  const audioChunksRef = useRef([])
+  const streamRef = useRef(null)
+  const timerRef = useRef(null)
+  const [previewUrl, setPreviewUrl] = useState('')
+
   useEffect(() => {
     if (peer) {
       loadHistory()
@@ -85,6 +95,16 @@ function Chat({ me, onLogout }) {
     }
   }, [peer])
 
+  useEffect(()=>{
+    return ()=>{
+      // cleanup media stream if leaving component
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t=>t.stop())
+      }
+      if (previewUrl) URL.revokeObjectURL(previewUrl)
+    }
+  }, [previewUrl])
+
   const search = async () => {
     if (!query.trim()) return
     const res = await fetch(`${API_BASE}/users/search?q=${encodeURIComponent(query)}`)
@@ -92,19 +112,73 @@ function Chat({ me, onLogout }) {
   }
 
   const loadHistory = async () => {
+    if (!peer) return
     const res = await fetch(`${API_BASE}/messages/history?user1=${me.username}&user2=${peer.username}&limit=100`)
     if (res.ok) setMessages(await res.json())
   }
 
+  const startRecording = async () => {
+    setPermissionError('')
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
+      audioChunksRef.current = []
+      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' })
+      mediaRecorderRef.current = mr
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data)
+      }
+      mr.onstop = () => {
+        // build blob and preview
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        const voiceFile = new File([blob], `voice-${Date.now()}.webm`, { type: 'audio/webm' })
+        setFile(voiceFile)
+        const url = URL.createObjectURL(blob)
+        if (previewUrl) URL.revokeObjectURL(previewUrl)
+        setPreviewUrl(url)
+      }
+      mr.start()
+      setRecording(true)
+      setElapsed(0)
+      timerRef.current = setInterval(()=>setElapsed((s)=>s+1), 1000)
+    } catch (err) {
+      setPermissionError('Microphone permission denied. You can also upload an audio file instead.')
+    }
+  }
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && recording) {
+      mediaRecorderRef.current.stop()
+      setRecording(false)
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t=>t.stop())
+        streamRef.current = null
+      }
+    }
+  }
+
+  const clearVoice = () => {
+    setFile(null)
+    if (previewUrl) { URL.revokeObjectURL(previewUrl); setPreviewUrl('') }
+    setElapsed(0)
+    setRecording(false)
+  }
+
   const send = async () => {
+    if (!peer) return
     const form = new FormData()
     form.append('sender', me.username)
     form.append('receiver', peer.username)
     form.append('type', type)
     if (type === 'text') {
+      if (!text.trim()) return
       form.append('text', text)
     } else if (file) {
       form.append('file', file)
+    } else {
+      // nothing to send
+      return
     }
     const res = await fetch(`${API_BASE}/messages/send`, {
       method: 'POST',
@@ -112,6 +186,7 @@ function Chat({ me, onLogout }) {
     })
     if (res.ok) {
       setText(''); setFile(null)
+      if (previewUrl) { URL.revokeObjectURL(previewUrl); setPreviewUrl('') }
       await loadHistory()
     }
   }
@@ -158,19 +233,39 @@ function Chat({ me, onLogout }) {
                 </div>
               ))}
             </div>
-            <div className="flex items-center gap-2">
-              <select className="bg-slate-800 rounded px-2 py-2" value={type} onChange={e=>setType(e.target.value)}>
-                <option value="text">Text</option>
-                <option value="image">Image</option>
-                <option value="video">Video</option>
-                <option value="audio">Audio</option>
-              </select>
-              {type==='text' ? (
-                <input className="flex-1 bg-slate-800 rounded px-3 py-2" placeholder="Type a message" value={text} onChange={e=>setText(e.target.value)} />
-              ) : (
-                <input type="file" accept={type==='image'? 'image/*' : type==='video'? 'video/*' : 'audio/*'} onChange={e=>setFile(e.target.files?.[0])} className="flex-1" />
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <select className="bg-slate-800 rounded px-2 py-2" value={type} onChange={e=>{setType(e.target.value); setFile(null); if (previewUrl) { URL.revokeObjectURL(previewUrl); setPreviewUrl('') }}}>
+                  <option value="text">Text</option>
+                  <option value="image">Image</option>
+                  <option value="video">Video</option>
+                  <option value="audio">Audio</option>
+                </select>
+                {type==='text' ? (
+                  <input className="flex-1 bg-slate-800 rounded px-3 py-2" placeholder="Type a message" value={text} onChange={e=>setText(e.target.value)} />
+                ) : (
+                  <input type="file" accept={type==='image'? 'image/*' : type==='video'? 'video/*' : 'audio/*'} onChange={e=>setFile(e.target.files?.[0] || null)} className="flex-1" />
+                )}
+                <button onClick={send} className="bg-indigo-600 rounded px-4 py-2">Send</button>
+              </div>
+
+              {type==='audio' && (
+                <div className="bg-slate-800 rounded p-3 flex items-center gap-3">
+                  {!recording ? (
+                    <button onClick={startRecording} className="px-3 py-2 rounded bg-green-600">Record</button>
+                  ) : (
+                    <button onClick={stopRecording} className="px-3 py-2 rounded bg-red-600 animate-pulse">Stop</button>
+                  )}
+                  <div className="text-sm text-slate-300">{recording ? `Recording... ${elapsed}s` : (file ? 'Recorded audio ready' : 'Use your mic or upload a file')}</div>
+                  {file && previewUrl && (
+                    <audio src={previewUrl} controls className="flex-1" />
+                  )}
+                  {file && (
+                    <button onClick={clearVoice} className="px-2 py-1 text-xs rounded bg-slate-700">Clear</button>
+                  )}
+                </div>
               )}
-              <button onClick={send} className="bg-indigo-600 rounded px-4 py-2">Send</button>
+              {permissionError && <div className="text-yellow-400 text-sm">{permissionError}</div>}
             </div>
           </>
         )}
